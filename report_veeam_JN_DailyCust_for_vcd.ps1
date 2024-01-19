@@ -4,26 +4,27 @@
     Author: Shawn Masterson
     Last Updated: December 2017
     Version: 9.5.3
-
-    Last Updated: 2023
-    VEEAM v12
-    Updated Agent Backup + Backup Copy
-    Version: 1.4
+    Philippe VELLY
+    Last Updated: Decembre 2023
+    Version: 2
 
  #> 
 
 #region User-Variables
 # VBR Server (Server Name, FQDN or IP)
-$vbrServer = "FQDN"
+$vbrServer = $env:computername
 
 # Report mode (RPO) - valid modes: any number of hours, Weekly or Monthly
 # 24, 48, "Weekly", "Monthly"
 $reportMode = "24"
 
+#Indiquer le Nom du client
+$Client = "CLIENT01"
+
 # Report Title
 $rptTitleMonth = " " 
 $rptTitleYear = " " + (Get-Date -format "dd/MM/yyyy")
-$rptTitle = "Rapport Veeam CUST - "
+$rptTitle = "Rapport Veeam $Client - "
 
 # Show VBR Server name in report header
 $showVBR = $true
@@ -34,7 +35,7 @@ $rptWidth = 97
 $veeamExePath = "C:\Program Files\Veeam\Backup and Replication\Backup\Veeam.Backup.Shell.exe"
 
 # Save HTML output to a file
-$saveHTML = $false
+$saveHTML = $true
 # HTML File output path and filename
 $pathHTML = "C:\JN\Veeam\VeeamReport_$(Get-Date -format MMddyyyy_hhmmss).htm"
 # Launch HTML file after creation
@@ -42,13 +43,14 @@ $launchHTML = $false
 
 # Email configuration
 $sendEmail = $true
-$emailHost = "MySmtp"
+$emailHost = "smtp.jaguar-network.com"
 $emailPort = 25
 $emailEnableSSL = $false
 $emailUser = ""
 $emailPass = ""
-$emailFrom = "from"
-$emailTo = "To"
+$emailFrom = "$Client@freepro.com"
+$emailTo = "admin-si@domain.tld,client@domain.tld"
+
 # Send HTML report as attachment (else HTML report is body)
 $emailAttach = $true
 # Email Subject 
@@ -74,7 +76,7 @@ $showUnprotectedVMs = $true
 $showProtectedVMs = $true
 # Exclude VMs from Missing and Successful Backups sections
 # $excludevms = @("vm1","vm2","*_replica")
-$excludeVMs = @("vsc*","vcav*","vCLS*","drsShellVm*")
+$excludeVMs = @("vsc*","vcav*","vCLS*")
 # Exclude VMs from Missing and Successful Backups sections in the following (vCenter) folder(s)
 # $excludeFolder = @("folder1","folder2","*_testonly")
 $excludeFolder = @("")
@@ -328,7 +330,7 @@ $MVRversion = "1.4"
 
 
 #region Connect
-Import-module -name "C:\Program Files\Veeam\Backup and Replication\Console\Veeam.Backup.PowerShell\Veeam.Backup.PowerShell.psd1" -WarningAction SilentlyContinue
+#Import-module -name "C:\Program Files\Veeam\Backup and Replication\Console\Veeam.Backup.PowerShell\Veeam.Backup.PowerShell.psd1" -WarningAction SilentlyContinue
 
 # Connect to VBR server
 $OpenConnection = (Get-VBRServerSession).Server
@@ -451,7 +453,13 @@ $tapesrvList = Get-VBRTapeServer
 
 # Convert mode (timeframe) to hours
 If ($reportMode -eq "Monthly") {
-  $HourstoCheck = 720
+  #$HourstoCheck = 720
+  # Obtenir la date actuelle
+    $dateAujourdhui = Get-Date
+  # Obtenir la m�me date du mois pr�c�dent
+    $dateMoisPrecedent = $dateAujourdhui.AddMonths(-1)
+    # Calculer la diff�rence en heures
+    $HourstoCheck = ($dateAujourdhui - $dateMoisPrecedent).TotalHours
 } Elseif ($reportMode -eq "Weekly") {
   $HourstoCheck = 168
 } Else {
