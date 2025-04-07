@@ -1,12 +1,12 @@
 #requires -Version 3.0
 <#
     .NOTES
-    Author: Shawn Masterson
-    Last Updated: December 2017
-    Version: 9.5.3
-    Philippe VELLY
-    Last Updated: Decembre 2023
-    Version: 2
+    Author: Philippe VELLY
+    Last Updated: 02 mai 2024
+    Version: 1.1
+    S3 Copie backups only (non backupcopy)
+    Objet HTML $TitleBackupJOB
+
 
  #> 
 
@@ -19,12 +19,12 @@ $vbrServer = $env:computername
 $reportMode = "24"
 
 #Indiquer le Nom du client
-$Client = "CLIENT01"
+$Client = "NomDuClient"
 
 # Report Title
 $rptTitleMonth = " " 
 $rptTitleYear = " " + (Get-Date -format "dd/MM/yyyy")
-$rptTitle = "Rapport Veeam $Client - "
+$rptTitle = "Rapport Veeam $Client - Sites FRA"
 
 # Show VBR Server name in report header
 $showVBR = $true
@@ -32,25 +32,25 @@ $showVBR = $true
 $rptWidth = 97
 
 # Location of Veeam executable (Veeam.Backup.Shell.exe)
-$veeamExePath = "C:\Program Files\Veeam\Backup and Replication\Backup\Veeam.Backup.Shell.exe"
+$veeamExePath = (get-ItemProperty -Path "HKLM:\SOFTWARE\Veeam\Veeam Backup and Replication").corepath + "Veeam.Backup.Shell.exe"
 
 # Save HTML output to a file
 $saveHTML = $true
 # HTML File output path and filename
-$pathHTML = "C:\JN\Veeam\VeeamReport_$(Get-Date -format MMddyyyy_hhmmss).htm"
+$pathHTML = "C:\Veeam\VeeamReport_$(Get-Date -format MMddyyyy_hhmmss).htm"
 # Launch HTML file after creation
-$launchHTML = $false
+$launchHTML = $true
 
 # Email configuration
 $sendEmail = $true
-$emailHost = "smtp.jaguar-network.com"
+$emailHost = "smtp.yourserver.com"
 $emailPort = 25
 $emailEnableSSL = $false
 $emailUser = ""
 $emailPass = ""
-$emailFrom = "$Client@freepro.com"
-$emailTo = "admin-si@domain.tld,client@domain.tld"
-
+$emailFrom = "$Client@yourdomain.com"
+$emailTo = "youremain@yourdomain.com"
+#$emailTo = "philippe.velly@freepro.com"
 # Send HTML report as attachment (else HTML report is body)
 $emailAttach = $true
 # Email Subject 
@@ -73,10 +73,10 @@ $showSummaryProtect = $true
 $showUnprotectedVMs = $true
 # Show VMs with Successful Backups within RPO ($reportMode)
 # Also shows VMs with Only Backups with Warnings within RPO ($reportMode)
-$showProtectedVMs = $true
+$showProtectedVMs = $false
 # Exclude VMs from Missing and Successful Backups sections
 # $excludevms = @("vm1","vm2","*_replica")
-$excludeVMs = @("vsc*","vcav*","vCLS*")
+$excludeVMs = @("vsc*","VeeamFLR*","vcav*","vCLS*","JSX000BN30-vm3932","DEMO-0*","TPL-*","*_replica")
 # Exclude VMs from Missing and Successful Backups sections in the following (vCenter) folder(s)
 # $excludeFolder = @("folder1","folder2","*_testonly")
 $excludeFolder = @("")
@@ -94,11 +94,11 @@ $showJobsBk = $false
 # Show Backup Job Size (total)
 $showBackupSizeBk = $false
 # Show detailed information for Backup Jobs/Sessions (Avg Speed, Total(GB), Processed(GB), Read(GB), Transferred(GB), Dedupe, Compression)
-$showDetailedBk = $true
+$showDetailedBk = $false
 # Show all Backup Sessions within time frame ($reportMode)
-$showAllSessBk = $true
+$showAllSessBk = $false
 # Show all Backup Tasks from Sessions within time frame ($reportMode)
-$showAllTasksBk = $true
+$showAllTasksBk = $false
 # Show Running Backup Jobs
 $showRunningBk = $false
 # Show Running Backup Tasks
@@ -112,7 +112,7 @@ $showSuccessBk = $false
 # Show Successful Backup Tasks from Sessions within time frame ($reportMode)
 $showTaskSuccessBk = $false
 # Only show last Session for each Backup Job
-$onlyLastBk = $false
+$onlyLastBk = $true
 # Only report on the following Backup Job(s)
 #$backupJob = @("Backup Job 1","Backup Job 3","Backup Job *")
 $backupJob = @("")
@@ -122,6 +122,94 @@ $showRestoRunVM = $true
 $showRestoreVM = $true
 #======== BACKUP ===========
 
+#####----------------------------------------###########
+
+$Jobs = Get-VBRJob  |  where { $_.JobType -eq "SimpleBackupCopyPolicy"}
+
+$list = @()
+
+foreach ($job in $Jobs) {
+    # Échapper les crochets dans le nom du job
+    #$escapedJobName = $job.Name -replace '\[', '`[' -replace '\]', '`]'
+
+   # $Backup = (Get-VBRJob -Name $escapedJobName).FindLastBackup()
+   $Backup = (Get-VBRJob -Name $job.Name).FindLastBackup()
+    $list += $Backup
+    
+}
+
+$list
+
+######
+
+#$list = Get-VBRBackup 
+#$list
+
+$limit = (Get-Date).AddHours(-24)
+$results = @()
+
+foreach($backup in $list) {
+    $rps = Get-VBRRestorePoint -Backup $backup  | Where-Object {$_.CreationTime -gt $limit}
+    #$shadowbackup = $backup.GetAllChildrenStorages()
+    foreach($rp in $rps) {
+        # Bucket info
+        $sobr = Get-VBRBackupRepository -ScaleOut -name ($rp.FindRepository()).name 
+        $extents = Get-VBRCapacityExtent -Repository $sobr
+        $storage = $rp.GetStorage()
+        foreach ($extent in $extents) {
+            try {
+                Remove-Variable shadowStorage -ErrorAction SilentlyContinue
+                Remove-Variable ShadowCopyS3 -ErrorAction SilentlyContinue
+                $shadowStorage = [Veeam.Backup.Core.CStorage]::GetShadowStorageByOriginalStorageId($storage.Id, $extent.Id)
+                if ($shadowStorage -ne $null) {
+                    $ShadowCopyS3 = "Yes"
+                    $Bucket = $extent.Repository.name
+                    break
+                }
+            } catch {
+                continue
+            }
+        }
+        if ($ShadowCopyS3 -ne "Yes") {
+            $ShadowCopyS3 = "No"
+            $Bucket = "NA"
+        }
+        $result = New-Object PSObject -Property @{
+            "RestorePointName" = $rp.Name
+            "FilePath" = $storage.FilePath
+            "CreationTime" = $storage.CreationTime
+            "ExternalContentMode" = $storage.ExternalContentMode
+            "ShadowCopyS3" = $ShadowCopyS3
+            "ListBuckets" = ($extents | ForEach-Object {$_.Repository.name}) -join(",")
+            "BucketUse" = $Bucket
+            "BackupType" = $rp.GetBackup().TypeToString
+            "FindRepository" = ($rp.FindRepository()).name 
+            "IsFullFast" = $storage.IsFullFast
+            "IsIncrementalFast" = $storage.IsIncrementalFast
+            "BackupName" = $backup.Name
+        }
+        
+        $results += $result
+    } 
+}
+
+
+
+#$newResults = $results | Sort-Object RestorePointName | Select-Object RestorePointName,BackupName,BackupType,ExternalContentMode,ShadowCopyS3,FindRepository,BucketUse,IsFullFast,IsIncrementalFast,ListBuckets,FilePath,CreationTime
+
+#$newResults = $results | Sort-Object CreationTime | Select-Object RestorePointName,BackupName,BackupType,ExternalContentMode,ShadowCopyS3,FindRepository,BucketUse,IsFullFast,IsIncrementalFast,ListBuckets,FilePath,CreationTime
+#$newResults = $results | Sort-Object CreationTime | Select-Object RestorePointName,BackupName,BackupType,ExternalContentMode,ShadowCopyS3,FindRepository,BucketUse,IsFullFast,IsIncrementalFast,ListBuckets,FilePath,CreationTime
+
+ 
+$newResults = $results | Where-Object {$_.ShadowCopyS3 -eq "No" -and $_.CreationTime -lt $limit } | Select-Object RestorePointName,ExternalContentMode,ShadowCopyS3,CreationTime
+
+$bodyAllSessBk = "Copy S3 des backupJob" + $subHead02
+$bodyAllJOB = $newResults  | ConvertTo-HTML -Fragment
+
+# Replace commas with <br/>
+$bodyAllJOB = $bodyAllJOB.Replace(",", "<br/>")
+#####----------------------------------------###########
+
 #======== REPLICA ===========
 # Show Replication Session Summary
 $showSummaryRp = $true
@@ -130,7 +218,7 @@ $showJobsRp = $true
 # Show detailed information for Replication Jobs/Sessions (Avg Speed, Total(GB), Processed(GB), Read(GB), Transferred(GB), Dedupe, Compression)
 $showDetailedRp = $true
 # Show all Replication Sessions within time frame ($reportMode)
-$showAllSessRp = $true
+$showAllSessRp = $false
 # Show all Replication Tasks from Sessions within time frame ($reportMode)
 $showAllTasksRp = $false
 # Show Running Replication Jobs
@@ -140,7 +228,7 @@ $showRunningTasksRp = $false
 # Show Replication Sessions w/Warnings or Failures within time frame ($reportMode)
 $showWarnFailRp = $false
 # Show Replication Tasks w/Warnings or Failures from Sessions within time frame ($reportMode)
-$showTaskWFRp = $true
+$showTaskWFRp = $false
 # Show Successful Replication Sessions within time frame ($reportMode)
 $showSuccessRp = $false
 # Show Successful Replication Tasks from Sessions within time frame ($reportMode)
@@ -162,7 +250,7 @@ $showBackupSizeBc = $false
 # Show detailed information for Backup Copy Sessions (Avg Speed, Total(GB), Processed(GB), Read(GB), Transferred(GB), Dedupe, Compression)
 $showDetailedBc = $true
 # Show all Backup Copy Sessions within time frame ($reportMode)
-$showAllSessBc = $true
+$showAllSessBc = $false
 # Show all Backup Copy Tasks from Sessions within time frame ($reportMode)
 $showAllTasksBc = $false
 # Show Idle Backup Copy Sessions
@@ -191,7 +279,7 @@ $bcopyJob = @("")
 
 #======== CONFIGURATION BACKUP ===========
 # Show Configuration Backup Summary
-$showSummaryConfig = $true
+$showSummaryConfig = $false
 # Show Proxy Info
 $showProxy = $true
 # Show Repository Info
@@ -330,7 +418,7 @@ $MVRversion = "1.4"
 
 
 #region Connect
-#Import-module -name "C:\Program Files\Veeam\Backup and Replication\Console\Veeam.Backup.PowerShell\Veeam.Backup.PowerShell.psd1" -WarningAction SilentlyContinue
+Import-module -name "C:\Program Files\Veeam\Backup and Replication\Console\Veeam.Backup.PowerShell\Veeam.Backup.PowerShell.psd1" -WarningAction SilentlyContinue
 
 # Connect to VBR server
 $OpenConnection = (Get-VBRServerSession).Server
@@ -453,13 +541,7 @@ $tapesrvList = Get-VBRTapeServer
 
 # Convert mode (timeframe) to hours
 If ($reportMode -eq "Monthly") {
-  #$HourstoCheck = 720
-  # Obtenir la date actuelle
-    $dateAujourdhui = Get-Date
-  # Obtenir la m�me date du mois pr�c�dent
-    $dateMoisPrecedent = $dateAujourdhui.AddMonths(-1)
-    # Calculer la diff�rence en heures
-    $HourstoCheck = ($dateAujourdhui - $dateMoisPrecedent).TotalHours
+  $HourstoCheck = 720
 } Elseif ($reportMode -eq "Weekly") {
   $HourstoCheck = 168
 } Else {
@@ -1241,6 +1323,15 @@ $TitleBackup = @"
                 </tr>
              </table>
 "@
+$TitleBackupJOB = @"
+<table>
+                 <tr>
+                    <td style="height: 35px;background-color: #636669;color: #ffffff;font-size: 16px;padding: 5px 0 0 15px;border-top: 5px solid white;border-bottom: none;">
+                    Backup Non Présent sur S3 après 24 heures
+                    </td>
+                </tr>
+             </table>
+"@
 
 
 $TitleRestore = @"
@@ -1336,7 +1427,7 @@ $HTMLbreakSimple = @"
 $footerObj = @"
 <table>
                 <tr>
-                    <td style="height: 15px;background-color: #ffffff;border: none;color: #626365;font-size: 10px;text-align:center;">My Veeam Report maintained by <a href="https://github.com/anastra13/MyVeeamReport/" target="_blank">https://github.com/anastra13/MyVeeamReport/</a></td>
+                    <td style="height: 15px;background-color: #ffffff;border: none;color: #626365;font-size: 10px;text-align:center;">My Veeam Report maintained by <a href="https://www.freepro.com/" target="_blank">https://www.freepro.com/</a></td>
                 </tr>
             </table>
         </center>
@@ -1407,7 +1498,7 @@ If ($showUnprotectedVMs) {
   If ($missingVMs -ne $null) {
     $missingVMs = $missingVMs | Sort vCenter, Datacenter, Cluster, Name | Select Name, vCenter, Datacenter, Cluster, Folder,
       @{Name="Last Start Time"; Expression = {$_.StartTime}}, @{Name="Last End Time"; Expression = {$_.StopTime}}, Details | ConvertTo-HTML -Fragment
-    $bodyMissing = $subHead01err + "VMs pr�sentes dans le vCenter mais non sauvegard�es" + $subHead02 + $missingVMs
+    $bodyMissing = $subHead01err + "VMs présentes dans le vCenter mais non sauvegardées" + $subHead02 + $missingVMs
   }
 }
 
@@ -1417,7 +1508,7 @@ If ($showProtectedVMs) {
   If ($warnVMs -ne $null) {
     $warnVMs = $warnVMs | Sort vCenter, Datacenter, Cluster, Name | Select Name, vCenter, Datacenter, Cluster, Folder,
       @{Name="Last Start Time"; Expression = {$_.StartTime}}, @{Name="Last End Time"; Expression = {$_.StopTime}}, Details | ConvertTo-HTML -Fragment
-    $bodyWarning = $subHead01war + "VMs sauvegard�es mais job en WARNING" + $subHead02 + $warnVMs
+    $bodyWarning = $subHead01war + "VMs sauvegardées mais job en WARNING" + $subHead02 + $warnVMs
   }
 }
 
@@ -1427,7 +1518,7 @@ If ($showProtectedVMs) {
   If ($successVMs -ne $null) {
     $successVMs = $successVMs | Sort vCenter, Datacenter, Cluster, Name | Select Name, vCenter, Datacenter, Cluster, Folder,
       @{Name="Last Start Time"; Expression = {$_.StartTime}}, @{Name="Last End Time"; Expression = {$_.StopTime}} | ConvertTo-HTML -Fragment
-    $bodySuccess = $subHead01suc + "VMs sauvegard�es" + $subHead02 + $successVMs
+    $bodySuccess = $subHead01suc + "VMs sauvegardées" + $subHead02 + $successVMs
   }
 }
 
@@ -1438,7 +1529,7 @@ If ($showMultiJobs) {
   If ($multiJobs.Count -gt 0) {
     $bodyMultiJobs = $multiJobs | Sort vCenter, Datacenter, Cluster, Name | Select Name, vCenter, Datacenter, Cluster, Folder,
       @{Name="Job Name"; Expression = {$_.JobName}} | ConvertTo-HTML -Fragment
-    $bodyMultiJobs = $subHead01war + "VMs pr�sentes dans plusieurs jobs de sauvegarde" + $subHead02 + $bodyMultiJobs
+    $bodyMultiJobs = $subHead01war + "VMs présentes dans plusieurs jobs de sauvegarde" + $subHead02 + $bodyMultiJobs
   }
 }
 
@@ -4127,8 +4218,8 @@ $htmlOutput = $headerObj + $bodyTop + $bodySummaryProtect + $bodySummaryBK + $bo
 If ($bodySummaryProtect + $bodySummaryBK + $bodySummaryRp + $bodySummaryBc + $bodySummaryTp + $bodySummaryEp + $bodySummarySb) {
   $htmlOutput += $HTMLbreak
 }
-  
-$htmlOutput += $TitleBackup + $bodyMissing + $bodyWarning + $bodySuccess
+  #Add PVE
+$htmlOutput += $TitleBackupJOB + $bodyAllJOB + $TitleBackup + $bodyMissing + $bodyWarning + $bodySuccess
 
 If ($bodyMissing + $bodySuccess + $bodyWarning) {
   $htmlOutput += $HTMLbreakSimple
